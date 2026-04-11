@@ -11,10 +11,13 @@ object NamedTupled {
     */
   inline transparent def of[F](inline f: F): Any = ${ ofImpl('f) }
 
+  /** Alias for `of`. Allows `NamedTupled(someMethod)`. */
+  inline transparent def apply[F](inline f: F): Any = ${ ofImpl('f) }
+
   /** Like `.tupled` but the resulting tuple type carries the parameter names from the original
     * method. Converts a multi-parameter function into a `Function1` from a named tuple.
     *
-    * Usage: `NamedTupled.tupled(someMethod)` gives `((a: A, b: B, ...)) => R`
+    * Usage: `NamedTupled.tupled(someMethod)` or `someMethod.namedTupled`
     */
   inline transparent def tupled[F](inline f: F): Any = ${ tupledImpl('f) }
 
