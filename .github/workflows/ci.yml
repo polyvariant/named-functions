@@ -32,6 +32,10 @@ jobs:
         with:
           power: true
 
+      - name: Test
+        run: |
+          scala-cli test .
+
       - name: Publish
         run: |
           scala-cli config publish.credentials central.sonatype.com env:SONATYPE_USERNAME env:SONATYPE_PASSWORD
