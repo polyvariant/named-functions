@@ -33,4 +33,18 @@ class NamedFunctionsTest extends munit.FunSuite {
     val result: Boolean = g((entityId = 1))((userId = "hello"))
     assert(result)
   }
+
+  test("untupled - named tuple function to named-parameter function") {
+    val tupled: ((entityId: Int, userId: String)) => Boolean = t => t.entityId > 0 && t.userId.nonEmpty
+    val f = tupled.namedUntupled
+    val result: Boolean = f(entityId = 1, userId = "hello")
+    assert(result)
+  }
+
+  test("untupled roundtrip - tupled then untupled") {
+    val g = foo.namedTupled
+    val f = g.namedUntupled
+    val result: Boolean = f(entityId = 1, userId = "hello")
+    assert(result)
+  }
 }

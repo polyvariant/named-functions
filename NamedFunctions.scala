@@ -312,6 +312,109 @@ object NamedFunctions {
     ).asExprOf[Any]
   }
 
+  /** Converts a `Function1` from a named tuple back into a multi-parameter function with named
+    * parameters. Reverses the process of `tupled`.
+    *
+    * Usage: `someFunction.namedUntupled`
+    */
+  inline transparent def untupled[F](inline f: F): Any = ${ untupledImpl('f) }
+
+  @publicInBinary
+  private[namedfunctions] def untupledImpl[F: Type](
+    f: Expr[F]
+  )(
+    using q: Quotes
+  ): Expr[Any] = {
+    import q.reflect.*
+
+    val funcTpe = TypeRepr.of[F].widenTermRefByName.dealias
+
+    // Extract Function1[NamedTuple[Names, Values], R]
+    val (namedTupleTpe, resultType) = funcTpe match {
+      case AppliedType(base, List(paramType, retType))
+          if base.typeSymbol.fullName == "scala.Function1" =>
+        (paramType.dealias, retType)
+      case other =>
+        report.errorAndAbort(
+          s"namedUntupled requires a Function1 from a named tuple, got: ${other.show}"
+        )
+    }
+
+    // Extract NamedTuple.NamedTuple[Names, Values]
+    val (namesTpe, valuesTpe) = namedTupleTpe match {
+      case AppliedType(base, List(names, values))
+          if base.typeSymbol.fullName == "scala.NamedTuple$.NamedTuple" =>
+        (names, values)
+      case other =>
+        report.errorAndAbort(
+          s"namedUntupled requires a Function1 from a named tuple, got parameter type: ${other.show}"
+        )
+    }
+
+    // Extract names from the Names tuple type
+    def extractNames(tpe: TypeRepr): List[String] =
+      tpe.dealias match {
+        case AppliedType(_, args) =>
+          args.map {
+            case ConstantType(StringConstant(name)) => name
+            case other => report.errorAndAbort(s"Expected string constant type, got: ${other.show}")
+          }
+        case other =>
+          report.errorAndAbort(s"Expected tuple type for names, got: ${other.show}")
+      }
+
+    // Extract types from the Values tuple type
+    def extractTypes(tpe: TypeRepr): List[TypeRepr] =
+      tpe.dealias match {
+        case AppliedType(_, args) => args
+        case other =>
+          report.errorAndAbort(s"Expected tuple type for values, got: ${other.show}")
+      }
+
+    val paramNames = extractNames(namesTpe)
+    val paramTypes = extractTypes(valuesTpe)
+
+    if (paramNames.length != paramTypes.length)
+      report.errorAndAbort(
+        s"Mismatch: ${paramNames.length} names but ${paramTypes.length} types in named tuple"
+      )
+
+    // Build FunctionN with refined apply
+    val funcNType = AppliedType(
+      defn.FunctionClass(paramNames.length).typeRef,
+      paramTypes :+ resultType,
+    )
+    val refinedType = Refinement(
+      funcNType,
+      "apply",
+      MethodType(paramNames)(_ => paramTypes, _ => resultType),
+    )
+
+    val mtpe = MethodType(paramNames)(_ => paramTypes, _ => resultType)
+
+    val lambda = Lambda(
+      Symbol.spliceOwner,
+      mtpe,
+      { (_, params) =>
+        val args = params.map(_.asInstanceOf[Term])
+        // Build a named tuple from the args and call the original function
+        val tupleModule = Symbol.requiredModule(s"scala.Tuple${paramNames.length}")
+        val tupleApply = tupleModule.methodMember("apply").head
+        val tuple = Ref(tupleModule).select(tupleApply).appliedToTypes(paramTypes).appliedToArgs(args)
+        // Cast tuple to the named tuple type
+        val namedTuple = Typed(tuple, TypeTree.of(using namedTupleTpe.asType.asInstanceOf[Type[Any]]))
+        // Call f.apply(namedTuple)
+        val applyMethod = defn.FunctionClass(1).methodMember("apply").head
+        f.asTerm.select(applyMethod).appliedToArgs(List(namedTuple))
+      },
+    )
+
+    Typed(
+      lambda,
+      TypeTree.of(using refinedType.asType.asInstanceOf[Type[Any]]),
+    ).asExprOf[Any]
+  }
+
 }
 
 object syntax {
@@ -319,6 +422,7 @@ object syntax {
   extension [F](inline f: F) {
     inline transparent def named: Any = ${ NamedFunctions.ofImpl('f) }
     inline transparent def namedTupled: Any = ${ NamedFunctions.tupledImpl('f) }
+    inline transparent def namedUntupled: Any = ${ NamedFunctions.untupledImpl('f) }
   }
 
 }
