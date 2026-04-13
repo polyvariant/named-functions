@@ -70,3 +70,52 @@ Like `.tupled` but the resulting tuple type carries the parameter names from the
 ### `NamedFunctions.untupled` / `.namedUntupled`
 
 The reverse of `tupled`. Converts a `Function1` from a named tuple into a multi-parameter function with named parameters.
+
+### `.nameChecked`
+
+Compile-time check that argument variable names exactly match the function's parameter names. Arguments are matched by name and automatically reordered, so order doesn't matter — only that the names are correct:
+
+```scala
+def foo(a: Int, b: String): String = s"$a-$b"
+
+val a = 42
+val b = "hello"
+
+foo.nameChecked(a, b)    // compiles — "42-hello"
+foo.nameChecked(b, a)    // also compiles — reordered to "42-hello"
+foo.nameChecked(b, x)    // compile error: unexpected: x; missing: a
+foo.nameChecked("hello") // compile error: requires plain variable references
+```
+
+Arguments must be plain variable references (not literals or expressions). Multiple parameter lists are supported — all arguments are passed flat:
+
+```scala
+def bar(entityId: Int)(userId: String): Boolean = ???
+
+val entityId = 1
+val userId = "hello"
+bar.nameChecked(entityId, userId)
+```
+
+### `.applyProduct`
+
+Applies a function using fields from a case class, matched by name (not position). The case class may have extra fields, but all function parameters must be present:
+
+```scala
+def foo(a: Int, b: String): String = s"$a-$b"
+
+case class Params(b: String, a: Int)
+foo.applyProduct(Params("hello", 42)) // "42-hello" — fields matched by name
+
+case class Extended(a: Int, b: String, extra: Boolean)
+foo.applyProduct(Extended(1, "hi", true)) // works — extra fields ignored
+```
+
+Multiple parameter lists are supported:
+
+```scala
+def bar(entityId: Int)(userId: String): Boolean = ???
+
+case class Params(entityId: Int, userId: String)
+bar.applyProduct(Params(1, "hello"))
+```

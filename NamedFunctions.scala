@@ -312,6 +312,23 @@ object NamedFunctions {
     ).asExprOf[Any]
   }
 
+  /** Applies a function after checking that each argument's variable name matches the corresponding
+    * parameter name. Fails at compile time if names don't match.
+    *
+    * Usage: `someMethod.nameChecked(matchingVar1, matchingVar2)`
+    */
+  inline transparent def nameChecked[F](inline f: F)(inline args: Any*): Any = ${
+    nameCheckedImpl('f, 'args)
+  }
+
+  /** Applies a function using fields from a product (case class) matched by name.
+    *
+    * Usage: `someMethod.applyProduct(someCaseClass)`
+    */
+  inline transparent def applyProduct[F, P](inline f: F)(inline p: P): Any = ${
+    applyProductImpl('f, 'p)
+  }
+
   /** Converts a `Function1` from a named tuple back into a multi-parameter function with named
     * parameters. Reverses the process of `tupled`.
     *
@@ -415,6 +432,159 @@ object NamedFunctions {
     ).asExprOf[Any]
   }
 
+  /** Shared helper: applies a function term to a flat list of argument terms, walking curried
+    * parameter clauses.
+    */
+  @publicInBinary
+  private[namedfunctions] def buildFuncApplication(
+    using q: Quotes
+  )(
+    fTerm: q.reflect.Term,
+    clauses: List[(List[String], List[q.reflect.TypeRepr])],
+    allArgs: List[q.reflect.Term],
+    resultType: q.reflect.TypeRepr,
+  ): q.reflect.Term = {
+    import q.reflect.*
+
+    def innerRetType(
+      remaining: List[(List[String], List[TypeRepr])],
+      retType: TypeRepr,
+    ): TypeRepr =
+      remaining match {
+        case Nil => retType
+        case (names, types) :: rest =>
+          val inner = innerRetType(rest, retType)
+          AppliedType(defn.FunctionClass(names.length).typeRef, types :+ inner)
+      }
+
+    clauses match {
+      case Nil => fTerm
+      case (names, types) :: rest =>
+        val (theseArgs, remainingArgs) = allArgs.splitAt(names.length)
+        val retTpe = innerRetType(rest, resultType)
+        val funcType = AppliedType(defn.FunctionClass(names.length).typeRef, types :+ retTpe)
+        val applyMethod = funcType.typeSymbol.methodMember("apply").head
+        val applied = fTerm.select(applyMethod).appliedToArgs(theseArgs)
+        buildFuncApplication(applied, rest, remainingArgs, resultType)
+    }
+  }
+
+  @publicInBinary
+  private[namedfunctions] def nameCheckedImpl[F: Type](
+    f: Expr[F],
+    args: Expr[Seq[Any]],
+  )(
+    using q: Quotes
+  ): Expr[Any] = {
+    import q.reflect.*
+
+    val (clauses, resultType) = extractInfo(f)
+
+    // Unpack varargs from the Repeated node
+    def unwrapInlined(term: Term): Term =
+      term match {
+        case Inlined(_, _, inner) => unwrapInlined(inner)
+        case other                => other
+      }
+
+    val argTerms: List[Term] = unwrapInlined(args.asTerm) match {
+      case Typed(Repeated(elems, _), _) => elems
+      case Repeated(elems, _)           => elems
+      case other =>
+        report.errorAndAbort(
+          s"nameChecked: unexpected args tree shape: ${other.show(using Printer.TreeStructure)}"
+        )
+    }
+
+    // Extract variable name from an argument term
+    def extractArgName(term: Term): String =
+      unwrapInlined(term) match {
+        case Ident(name) => name
+        case other =>
+          report.errorAndAbort(
+            s"nameChecked requires plain variable references as arguments, got: ${other.show}"
+          )
+      }
+
+    val flatParamNames = clauses.flatMap(_._1)
+    val argsByName: Map[String, Term] = argTerms.map { term =>
+      val name = extractArgName(term)
+      name -> term
+    }.toMap
+
+    val argNames = argTerms.map(extractArgName)
+
+    if (argsByName.size != argTerms.length) {
+      val dupes = argNames.groupBy(identity).collect { case (n, vs) if vs.length > 1 => n }
+      report.errorAndAbort(
+        s"nameChecked: duplicate argument names: ${dupes.mkString(", ")}"
+      )
+    }
+
+    if (argTerms.length != flatParamNames.length)
+      report.errorAndAbort(
+        s"nameChecked: expected ${flatParamNames.length} arguments but got ${argTerms.length}"
+      )
+
+    // Check that argument names are an exact match for parameter names
+    val paramNameSet = flatParamNames.toSet
+    val argNameSet = argsByName.keySet
+    val unexpected = argNameSet -- paramNameSet
+    val missing = paramNameSet -- argNameSet
+    if (unexpected.nonEmpty || missing.nonEmpty) {
+      val parts = List(
+        if (unexpected.nonEmpty) Some(s"unexpected: ${unexpected.mkString(", ")}") else None,
+        if (missing.nonEmpty) Some(s"missing: ${missing.mkString(", ")}") else None,
+      ).flatten
+      report.errorAndAbort(s"nameChecked: ${parts.mkString("; ")}")
+    }
+
+    // Reorder arguments to match parameter order
+    val reorderedArgs = flatParamNames.map(argsByName)
+    val result = buildFuncApplication(f.asTerm, clauses, reorderedArgs, resultType)
+    result.asExprOf[Any]
+  }
+
+  @publicInBinary
+  private[namedfunctions] def applyProductImpl[F: Type, P: Type](
+    f: Expr[F],
+    p: Expr[P],
+  )(
+    using q: Quotes
+  ): Expr[Any] = {
+    import q.reflect.*
+
+    val (clauses, resultType) = extractInfo(f)
+
+    val productType = TypeRepr.of[P].widenTermRefByName.dealias
+    val productSymbol = productType.typeSymbol
+    val caseFields = productSymbol.caseFields
+
+    val fieldsByName: Map[String, Symbol] = caseFields.map(f => f.name -> f).toMap
+
+    // For each parameter, find the matching field
+    val allArgs: List[Term] = clauses.flatMap { case (names, types) =>
+      names.zip(types).map { case (paramName, paramType) =>
+        fieldsByName.get(paramName) match {
+          case None =>
+            report.errorAndAbort(
+              s"applyProduct: product type ${productType.show} has no field named '$paramName'"
+            )
+          case Some(fieldSym) =>
+            val fieldType = productType.memberType(fieldSym)
+            if (!(fieldType <:< paramType))
+              report.errorAndAbort(
+                s"applyProduct: field '$paramName' has type ${fieldType.show} but parameter expects ${paramType.show}"
+              )
+            p.asTerm.select(fieldSym)
+        }
+      }
+    }
+
+    val result = buildFuncApplication(f.asTerm, clauses, allArgs, resultType)
+    result.asExprOf[Any]
+  }
+
 }
 
 object syntax {
@@ -423,6 +593,12 @@ object syntax {
     inline transparent def named: Any = ${ NamedFunctions.ofImpl('f) }
     inline transparent def namedTupled: Any = ${ NamedFunctions.tupledImpl('f) }
     inline transparent def namedUntupled: Any = ${ NamedFunctions.untupledImpl('f) }
+    inline transparent def nameChecked(inline args: Any*): Any = ${
+      NamedFunctions.nameCheckedImpl('f, 'args)
+    }
+    inline transparent def applyProduct[P](inline p: P): Any = ${
+      NamedFunctions.applyProductImpl('f, 'p)
+    }
   }
 
 }
