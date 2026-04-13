@@ -152,4 +152,44 @@ class NamedFunctionsTest extends munit.FunSuite {
     val result: Boolean = fooMultiLists.applyProduct(params)
     assert(result)
   }
+
+  // constructor tests
+
+  test("applyProduct - case class constructor") {
+    case class Foo(a: Int, b: String)
+    case class Params(b: String, a: Int)
+    val result = Foo.apply.applyProduct(Params("hello", 42))
+    assertEquals(result, Foo(42, "hello"))
+  }
+
+  test("nameChecked - case class constructor") {
+    case class Foo(a: Int, b: String)
+    val a = 42
+    val b = "hello"
+    val result = Foo.apply.nameChecked(b, a)
+    assertEquals(result, Foo(42, "hello"))
+  }
+
+  // function values don't carry parameter names
+
+  test("applyProduct - function value fails (no parameter names)") {
+    val errors = compileErrors("""
+      import namedfunctions.syntax.*
+      val f = (a: Int, b: String) => s"$a-$b"
+      case class Params(a: Int, b: String)
+      f.applyProduct(Params(42, "hello"))
+    """)
+    assert(errors.contains("Could not extract parameter names"), errors)
+  }
+
+  test("nameChecked - function value fails (no parameter names)") {
+    val errors = compileErrors("""
+      import namedfunctions.syntax.*
+      val f = (a: Int, b: String) => s"$a-$b"
+      val a = 42
+      val b = "hello"
+      f.nameChecked(a, b)
+    """)
+    assert(errors.contains("Could not extract parameter names"), errors)
+  }
 }

@@ -157,3 +157,16 @@ def bar(entityId: Int)(userId: String): Boolean = ???
 case class Params(entityId: Int, userId: String)
 bar.applyProduct(Params(1, "hello"))
 ```
+
+## Limitations
+
+All features require the macro to extract parameter names from the call site's AST. This works with method references (`obj.method`), eta-expanded methods, and case class constructors (`Foo.apply`), but **not with function values stored in a `val`**:
+
+```scala
+val f = (a: Int, b: String) => s"$a-$b"
+f.named          // compile error: Could not extract parameter names
+f.nameChecked(a, b) // same
+f.applyProduct(p)   // same
+```
+
+The parameter names exist in the lambda at the definition site, but are erased by the time the `val` reference reaches the macro.
