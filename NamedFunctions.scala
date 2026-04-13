@@ -35,10 +35,10 @@ object NamedFunctions {
 
     def extractParamClauses(term: Term): Option[List[List[String]]] =
       term match {
-        case Inlined(_, _, expr) => extractParamClauses(expr)
+        case Inlined(_, _, expr)                 => extractParamClauses(expr)
         case Block(List(dd: DefDef), _: Closure) =>
-          val clauses = dd.paramss.collect {
-            case clause: TermParamClause => clause.params.map(_.name)
+          val clauses = dd.paramss.collect { case clause: TermParamClause =>
+            clause.params.map(_.name)
           }
           // Only recurse into the body if it's another closure (curried function)
           val innerClauses = dd.rhs.flatMap {
@@ -50,12 +50,13 @@ object NamedFunctions {
             case _ if clauses.nonEmpty           => Some(clauses)
             case _                               => None
           }
-        case Block(_, expr) => extractParamClauses(expr)
+        case Block(_, expr)       => extractParamClauses(expr)
         case Lambda(params, body) =>
-          val innerClauses = body match {
-            case b @ Block(List(_: DefDef), _: Closure) => extractParamClauses(b)
-            case _                                      => None
-          }
+          val innerClauses =
+            body match {
+              case b @ Block(List(_: DefDef), _: Closure) => extractParamClauses(b)
+              case _                                      => None
+            }
           innerClauses match {
             case Some(rest) => Some(params.map(_.name) :: rest)
             case None       => Some(List(params.map(_.name)))
@@ -67,11 +68,25 @@ object NamedFunctions {
             Some(nonEmpty.map(_.map(_.name)))
           else
             None
-        case _ => None
+        case _ =>
+          // Fallback: try to extract names from refined FunctionN types
+          // e.g. Function2[A, B, R] { def apply(a: A, b: B): R }
+          def extractFromRefinedType(tpe: TypeRepr): Option[List[List[String]]] =
+            tpe.dealias match {
+              case Refinement(parent, "apply", MethodType(names, _, retTpe)) =>
+                val innerClauses = extractFromRefinedType(retTpe)
+                innerClauses match {
+                  case Some(rest) => Some(names :: rest)
+                  case None       => Some(List(names))
+                }
+              case _ => None
+            }
+          extractFromRefinedType(TypeRepr.of[F].widenTermRefByName.dealias)
       }
 
     def unfoldFuncType(tpe: TypeRepr): (List[List[TypeRepr]], TypeRepr) =
       tpe match {
+        case Refinement(parent, _, _) => unfoldFuncType(parent)
         case AppliedType(base, args) if base.typeSymbol.fullName.startsWith("scala.Function") =>
           val paramTypes = args.init
           val retType = args.last
@@ -148,7 +163,7 @@ object NamedFunctions {
       retType: TypeRepr,
     ): TypeRepr =
       clauses match {
-        case Nil => retType
+        case Nil                    => retType
         case (names, types) :: rest =>
           val innerType = buildRefinedType(rest, retType)
           val funcType = AppliedType(defn.FunctionClass(names.length).typeRef, types :+ innerType)
@@ -166,7 +181,7 @@ object NamedFunctions {
       retType: TypeRepr,
     ): Term =
       clauses match {
-        case Nil => fTerm
+        case Nil                    => fTerm
         case (names, types) :: rest =>
           val innerType = buildRefinedType(rest, retType)
           val mtpe = MethodType(names)(_ => types, _ => innerType)
@@ -181,8 +196,10 @@ object NamedFunctions {
               )
               val applyMethod = funcType.typeSymbol.methodMember("apply").head
               val applied = fTerm.select(applyMethod).appliedToArgs(args)
-              if (rest.isEmpty) applied
-              else buildLambda(meth, rest, applied, retType)
+              if (rest.isEmpty)
+                applied
+              else
+                buildLambda(meth, rest, applied, retType)
             },
           )
       }
@@ -192,7 +209,9 @@ object NamedFunctions {
 
     Typed(
       lambda,
-      TypeTree.of(using fullType.asType.asInstanceOf[Type[Any]]),
+      TypeTree.of(
+        using fullType.asType.asInstanceOf[Type[Any]]
+      ),
     ).asExprOf[Any]
   }
 
@@ -241,7 +260,7 @@ object NamedFunctions {
       retType: TypeRepr,
     ): TypeRepr =
       clauses match {
-        case Nil => retType
+        case Nil                    => retType
         case (names, types) :: rest =>
           val ntType = namedTupleType(names, types)
           val innerType = buildTupledType(rest, retType)
@@ -253,14 +272,14 @@ object NamedFunctions {
       retType: TypeRepr,
     ): TypeRepr =
       clauses match {
-        case Nil => retType
+        case Nil                    => retType
         case (names, types) :: rest =>
           val innerType = buildFuncType(rest, retType)
           AppliedType(defn.FunctionClass(names.length).typeRef, types :+ innerType)
       }
 
-    def extractArgs(ntRef: Term, types: List[TypeRepr]): List[Term] =
-      types.zipWithIndex.map { case (pt, i) =>
+    def extractArgs(ntRef: Term, types: List[TypeRepr]): List[Term] = types.zipWithIndex.map {
+      case (pt, i) =>
         Select
           .unique(
             Apply(
@@ -270,7 +289,7 @@ object NamedFunctions {
             "asInstanceOf",
           )
           .appliedToType(pt)
-      }
+    }
 
     def buildTupledLambda(
       owner: Symbol,
@@ -279,7 +298,7 @@ object NamedFunctions {
       retType: TypeRepr,
     ): Term =
       clauses match {
-        case Nil => fTerm
+        case Nil                    => fTerm
         case (names, types) :: rest =>
           val ntType = namedTupleType(names, types)
           val innerType = buildTupledType(rest, retType)
@@ -297,8 +316,10 @@ object NamedFunctions {
               val funcType = buildFuncType(clauses, retType)
               val applyMethod = funcType.typeSymbol.methodMember("apply").head
               val applied = fTerm.select(applyMethod).appliedToArgs(args)
-              if (rest.isEmpty) applied
-              else buildTupledLambda(meth, rest, applied, retType)
+              if (rest.isEmpty)
+                applied
+              else
+                buildTupledLambda(meth, rest, applied, retType)
             },
           )
       }
@@ -308,7 +329,9 @@ object NamedFunctions {
 
     Typed(
       lambda,
-      TypeTree.of(using fullType.asType.asInstanceOf[Type[Any]]),
+      TypeTree.of(
+        using fullType.asType.asInstanceOf[Type[Any]]
+      ),
     ).asExprOf[Any]
   }
 
@@ -317,17 +340,19 @@ object NamedFunctions {
     *
     * Usage: `someMethod.nameChecked(matchingVar1, matchingVar2)`
     */
-  inline transparent def nameChecked[F](inline f: F)(inline args: Any*): Any = ${
-    nameCheckedImpl('f, 'args)
-  }
+  inline transparent def nameChecked[F](inline f: F)(inline args: Any*): Any =
+    ${
+      nameCheckedImpl('f, 'args)
+    }
 
   /** Applies a function using fields from a product (case class) matched by name.
     *
     * Usage: `someMethod.applyProduct(someCaseClass)`
     */
-  inline transparent def applyProduct[F, P](inline f: F)(inline p: P): Any = ${
-    applyProductImpl('f, 'p)
-  }
+  inline transparent def applyProduct[F, P](inline f: F)(inline p: P): Any =
+    ${
+      applyProductImpl('f, 'p)
+    }
 
   /** Converts a `Function1` from a named tuple back into a multi-parameter function with named
     * parameters. Reverses the process of `tupled`.
@@ -347,26 +372,28 @@ object NamedFunctions {
     val funcTpe = TypeRepr.of[F].widenTermRefByName.dealias
 
     // Extract Function1[NamedTuple[Names, Values], R]
-    val (namedTupleTpe, resultType) = funcTpe match {
-      case AppliedType(base, List(paramType, retType))
-          if base.typeSymbol.fullName == "scala.Function1" =>
-        (paramType.dealias, retType)
-      case other =>
-        report.errorAndAbort(
-          s"namedUntupled requires a Function1 from a named tuple, got: ${other.show}"
-        )
-    }
+    val (namedTupleTpe, resultType) =
+      funcTpe match {
+        case AppliedType(base, List(paramType, retType))
+            if base.typeSymbol.fullName == "scala.Function1" =>
+          (paramType.dealias, retType)
+        case other =>
+          report.errorAndAbort(
+            s"namedUntupled requires a Function1 from a named tuple, got: ${other.show}"
+          )
+      }
 
     // Extract NamedTuple.NamedTuple[Names, Values]
-    val (namesTpe, valuesTpe) = namedTupleTpe match {
-      case AppliedType(base, List(names, values))
-          if base.typeSymbol.fullName == "scala.NamedTuple$.NamedTuple" =>
-        (names, values)
-      case other =>
-        report.errorAndAbort(
-          s"namedUntupled requires a Function1 from a named tuple, got parameter type: ${other.show}"
-        )
-    }
+    val (namesTpe, valuesTpe) =
+      namedTupleTpe match {
+        case AppliedType(base, List(names, values))
+            if base.typeSymbol.fullName == "scala.NamedTuple$.NamedTuple" =>
+          (names, values)
+        case other =>
+          report.errorAndAbort(
+            s"namedUntupled requires a Function1 from a named tuple, got parameter type: ${other.show}"
+          )
+      }
 
     // Extract names from the Names tuple type
     def extractNames(tpe: TypeRepr): List[String] =
@@ -376,16 +403,14 @@ object NamedFunctions {
             case ConstantType(StringConstant(name)) => name
             case other => report.errorAndAbort(s"Expected string constant type, got: ${other.show}")
           }
-        case other =>
-          report.errorAndAbort(s"Expected tuple type for names, got: ${other.show}")
+        case other => report.errorAndAbort(s"Expected tuple type for names, got: ${other.show}")
       }
 
     // Extract types from the Values tuple type
     def extractTypes(tpe: TypeRepr): List[TypeRepr] =
       tpe.dealias match {
         case AppliedType(_, args) => args
-        case other =>
-          report.errorAndAbort(s"Expected tuple type for values, got: ${other.show}")
+        case other => report.errorAndAbort(s"Expected tuple type for values, got: ${other.show}")
       }
 
     val paramNames = extractNames(namesTpe)
@@ -417,9 +442,17 @@ object NamedFunctions {
         // Build a named tuple from the args and call the original function
         val tupleModule = Symbol.requiredModule(s"scala.Tuple${paramNames.length}")
         val tupleApply = tupleModule.methodMember("apply").head
-        val tuple = Ref(tupleModule).select(tupleApply).appliedToTypes(paramTypes).appliedToArgs(args)
+        val tuple = Ref(tupleModule)
+          .select(tupleApply)
+          .appliedToTypes(paramTypes)
+          .appliedToArgs(args)
         // Cast tuple to the named tuple type
-        val namedTuple = Typed(tuple, TypeTree.of(using namedTupleTpe.asType.asInstanceOf[Type[Any]]))
+        val namedTuple = Typed(
+          tuple,
+          TypeTree.of(
+            using namedTupleTpe.asType.asInstanceOf[Type[Any]]
+          ),
+        )
         // Call f.apply(namedTuple)
         val applyMethod = defn.FunctionClass(1).methodMember("apply").head
         f.asTerm.select(applyMethod).appliedToArgs(List(namedTuple))
@@ -428,7 +461,9 @@ object NamedFunctions {
 
     Typed(
       lambda,
-      TypeTree.of(using refinedType.asType.asInstanceOf[Type[Any]]),
+      TypeTree.of(
+        using refinedType.asType.asInstanceOf[Type[Any]]
+      ),
     ).asExprOf[Any]
   }
 
@@ -451,14 +486,14 @@ object NamedFunctions {
       retType: TypeRepr,
     ): TypeRepr =
       remaining match {
-        case Nil => retType
+        case Nil                    => retType
         case (names, types) :: rest =>
           val inner = innerRetType(rest, retType)
           AppliedType(defn.FunctionClass(names.length).typeRef, types :+ inner)
       }
 
     clauses match {
-      case Nil => fTerm
+      case Nil                    => fTerm
       case (names, types) :: rest =>
         val (theseArgs, remainingArgs) = allArgs.splitAt(names.length)
         val retTpe = innerRetType(rest, resultType)
@@ -487,31 +522,35 @@ object NamedFunctions {
         case other                => other
       }
 
-    val argTerms: List[Term] = unwrapInlined(args.asTerm) match {
-      case Typed(Repeated(elems, _), _) => elems
-      case Repeated(elems, _)           => elems
-      case other =>
-        report.errorAndAbort(
-          s"nameChecked: unexpected args tree shape: ${other.show(using Printer.TreeStructure)}"
-        )
-    }
+    val argTerms: List[Term] =
+      unwrapInlined(args.asTerm) match {
+        case Typed(Repeated(elems, _), _) => elems
+        case Repeated(elems, _)           => elems
+        case other                        =>
+          report.errorAndAbort(
+            s"nameChecked: unexpected args tree shape: ${other.show(
+                using Printer.TreeStructure
+              )}"
+          )
+      }
 
     // Extract variable or field name from an argument term
     def extractArgName(term: Term): String =
       unwrapInlined(term) match {
-        case Ident(name)       => name
-        case Select(_, name)   => name
-        case other =>
+        case Ident(name)     => name
+        case Select(_, name) => name
+        case other           =>
           report.errorAndAbort(
             s"nameChecked requires variable references or field accesses as arguments, got: ${other.show}"
           )
       }
 
     val flatParamNames = clauses.flatMap(_._1)
-    val argsByName: Map[String, Term] = argTerms.map { term =>
-      val name = extractArgName(term)
-      name -> term
-    }.toMap
+    val argsByName: Map[String, Term] =
+      argTerms.map { term =>
+        val name = extractArgName(term)
+        name -> term
+      }.toMap
 
     val argNames = argTerms.map(extractArgName)
 
@@ -533,10 +572,17 @@ object NamedFunctions {
     val unexpected = argNameSet -- paramNameSet
     val missing = paramNameSet -- argNameSet
     if (unexpected.nonEmpty || missing.nonEmpty) {
-      val parts = List(
-        if (unexpected.nonEmpty) Some(s"unexpected: ${unexpected.mkString(", ")}") else None,
-        if (missing.nonEmpty) Some(s"missing: ${missing.mkString(", ")}") else None,
-      ).flatten
+      val parts =
+        List(
+          if (unexpected.nonEmpty)
+            Some(s"unexpected: ${unexpected.mkString(", ")}")
+          else
+            None,
+          if (missing.nonEmpty)
+            Some(s"missing: ${missing.mkString(", ")}")
+          else
+            None,
+        ).flatten
       report.errorAndAbort(s"nameChecked: ${parts.mkString("; ")}")
     }
 
@@ -594,12 +640,17 @@ object syntax {
     inline transparent def named: Any = ${ NamedFunctions.ofImpl('f) }
     inline transparent def namedTupled: Any = ${ NamedFunctions.tupledImpl('f) }
     inline transparent def namedUntupled: Any = ${ NamedFunctions.untupledImpl('f) }
-    inline transparent def nameChecked(inline args: Any*): Any = ${
-      NamedFunctions.nameCheckedImpl('f, 'args)
-    }
-    inline transparent def applyProduct[P](inline p: P): Any = ${
-      NamedFunctions.applyProductImpl('f, 'p)
-    }
+
+    inline transparent def nameChecked(inline args: Any*): Any =
+      ${
+        NamedFunctions.nameCheckedImpl('f, 'args)
+      }
+
+    inline transparent def applyProduct[P](inline p: P): Any =
+      ${
+        NamedFunctions.applyProductImpl('f, 'p)
+      }
+
   }
 
 }

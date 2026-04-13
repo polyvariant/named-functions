@@ -192,4 +192,36 @@ class NamedFunctionsTest extends munit.FunSuite {
     """)
     assert(errors.contains("Could not extract parameter names"), errors)
   }
+
+  // chaining / combination tests
+
+  test("named then applyProduct") {
+    def bar(a: Int, b: String): String = s"$a-$b"
+    case class Params(b: String, a: Int)
+    val result: String = bar.named.applyProduct(Params("hello", 42))
+    assertEquals(result, "42-hello")
+  }
+
+  test("named then nameChecked") {
+    def bar(a: Int, b: String): String = s"$a-$b"
+    val a = 42
+    val b = "hello"
+    val result: String = bar.named.nameChecked(a, b)
+    assertEquals(result, "42-hello")
+  }
+
+  test("namedTupled then namedUntupled then applyProduct") {
+    def bar(a: Int, b: String): String = s"$a-$b"
+    case class Params(b: String, a: Int)
+    val result: String = bar.namedTupled.namedUntupled.applyProduct(Params("hello", 42))
+    assertEquals(result, "42-hello")
+  }
+
+  test("namedTupled then namedUntupled then nameChecked") {
+    def bar(a: Int, b: String): String = s"$a-$b"
+    val b = "hello"
+    val a = 42
+    val result: String = bar.namedTupled.namedUntupled.nameChecked(b, a)
+    assertEquals(result, "42-hello")
+  }
 }

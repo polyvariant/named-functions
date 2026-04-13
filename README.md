@@ -158,6 +158,24 @@ case class Params(entityId: Int, userId: String)
 bar.applyProduct(Params(1, "hello"))
 ```
 
+## Chaining
+
+Features can be composed — the output of one transformation is a valid input for another:
+
+```scala
+def foo(a: Int, b: String): String = s"$a-$b"
+
+case class Params(b: String, a: Int)
+foo.named.applyProduct(Params("hello", 42)) // "42-hello"
+
+val a = 42
+val b = "hello"
+foo.named.nameChecked(a, b) // "42-hello"
+
+// Round-trip through tupling and back
+foo.namedTupled.namedUntupled.applyProduct(Params("hello", 42)) // "42-hello"
+```
+
 ## Limitations
 
 All features require the macro to extract parameter names from the call site's AST. This works with method references (`obj.method`), eta-expanded methods, and case class constructors (`Foo.apply`), but **not with function values stored in a `val`**:
