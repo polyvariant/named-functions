@@ -2,6 +2,36 @@
 
 Scala 3 macros for converting multi-parameter functions into functions with named parameters or named-tuple arguments, preserving the original parameter names.
 
+## Quick overview
+
+```scala
+import namedfunctions.syntax.*
+
+def greet(name: String, age: Int): String = s"$name is $age"
+
+// .named — named parameters at call site
+val f = greet.named
+f(name = "Alice", age = 30) // "Alice is 30"
+
+// .namedTupled — function from named tuple
+val g = greet.namedTupled
+g((name = "Alice", age = 30)) // "Alice is 30"
+
+// .namedUntupled — reverse of tupling
+val h: ((name: String, age: Int)) => String = t => s"${t.name} is ${t.age}"
+h.namedUntupled(name = "Alice", age = 30) // "Alice is 30"
+
+// .nameChecked — compile-time name validation, order-independent
+val age = 30
+val name = "Alice"
+greet.nameChecked(age, name) // "Alice is 30" — reordered automatically
+// greet.nameChecked(age, x) // compile error: unexpected: x; missing: name
+
+// .applyProduct — apply from case class fields by name
+case class Person(age: Int, name: String, email: String)
+greet.applyProduct(Person(30, "Alice", "a@b.com")) // "Alice is 30" — extra fields ignored
+```
+
 ## Installation
 
 Available on Maven Central as `org.polyvariant::named-functions`.
