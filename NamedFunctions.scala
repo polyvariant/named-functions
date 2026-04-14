@@ -330,7 +330,7 @@ object NamedFunctions {
     Typed(
       lambda,
       TypeTree.of(
-        using fullType.asType.asInstanceOf[Type[Any]]
+        using fullType.asType
       ),
     ).asExprOf[Any]
   }
